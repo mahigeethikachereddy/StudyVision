@@ -1,0 +1,7 @@
+{
+  "buildCommand": "echo 'No build needed'",
+  "devCommand": "npx serve web",
+  "installCommand": "echo 'No install needed'",
+  "framework": "static",
+  "regions": ["iad1"]
+}
