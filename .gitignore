@@ -1,0 +1,41 @@
+# Virtual environment
+.venv/
+
+# Qodo internal config
+.qodo/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Generated data and logs
+data/session_logs/
+
+# Generated reports
+reports/
+
+# Model binaries (trained models, can be regenerated)
+*.joblib
+
+# MediaPipe model file (downloaded automatically)
+*.task
+
+# Environment variables
+.env
+.env.local
+
+# Distribution
+dist/
+build/
+*.egg-info/

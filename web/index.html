@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StudyVision</title>
+  <style>
+    body { max-width: 1040px; margin: 32px auto; padding: 0 20px; background: #f5f7fb; color: #172033; font: 16px Arial, sans-serif; }
+    h1 { margin: 0 0 8px; } h2 { margin-top: 0; } .muted { color: #667085; line-height: 1.5; }
+    .layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr); gap: 18px; margin-top: 24px; }
+    video, .panel, .summary { width: 100%; box-sizing: border-box; border: 1px solid #dbe2ea; border-radius: 12px; background: white; }
+    video { min-height: 340px; background: #101828; object-fit: cover; transform: scaleX(-1); }
+    .panel, .summary { padding: 20px; } .status { margin: 12px 0 24px; font-size: 28px; font-weight: 700; color: #246bce; }
+    button { width: 100%; padding: 12px; margin-top: 10px; border: 0; border-radius: 8px; font: inherit; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: .55; cursor: not-allowed; } #startButton { background: #246bce; color: white; } #breakButton { background: #f5b700; } #endButton, #downloadButton { background: #344054; color: white; }
+    .summary { margin-top: 20px; } .hidden { display: none; } .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 12px; margin: 16px 0; }
+    .card { padding: 14px; border: 1px solid #dbe2ea; border-radius: 8px; } .value { display: block; margin-top: 6px; font-size: 24px; font-weight: 700; }
+    .privacy { margin-top: 22px; padding: 14px; border-left: 4px solid #246bce; background: #eaf2ff; line-height: 1.5; }
+    @media (max-width: 700px) { .layout { grid-template-columns: 1fr; } video { min-height: 240px; } }
+  </style>
+</head>
+<body>
+  <h1>StudyVision</h1>
+  <p class="muted">A private, browser-based study-session companion.</p>
+  <div class="privacy"><strong>Your privacy:</strong> webcam frames are analysed inside this browser and are never uploaded or stored by StudyVision. The face-detection model downloads once from MediaPipe when the app starts.</div>
+  <div class="layout">
+    <video id="video" autoplay muted playsinline></video>
+    <section class="panel">
+      <strong>Current status</strong>
+      <div id="status" class="status">Ready to begin</div>
+      <p class="muted">A distraction is recorded only after your face is absent continuously for three seconds.</p>
+      <button id="startButton">Start study session</button>
+      <button id="breakButton" disabled>Start break</button>
+      <button id="endButton" disabled>End session</button>
+    </section>
+  </div>
+  <section id="summary" class="summary hidden"></section>
+  <button id="downloadButton" class="hidden">Download my session data</button>
+
+  <script type="module">
+    import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+    const SAMPLE_INTERVAL = 1000;
+    const DISTRACTION_DELAY = 3000;
+    const video = document.querySelector('#video');
+    const status = document.querySelector('#status');
+    const startButton = document.querySelector('#startButton');
+    const breakButton = document.querySelector('#breakButton');
+    const endButton = document.querySelector('#endButton');
+    const summary = document.querySelector('#summary');
+    const downloadButton = document.querySelector('#downloadButton');
+    let faceLandmarker; let stream; let running = false; let onBreak = false;
+    let sessionStartedAt; let faceMissingSince; let lastSampleAt = 0; let animationFrame;
+    const observations = [];
+
+    function setStatus(text) { status.textContent = text; }
+    function record(state, now) {
+      if (now - lastSampleAt < SAMPLE_INTERVAL) return;
+      observations.push({ elapsedSeconds: Math.round((now - sessionStartedAt) / 1000), state });
+      lastSampleAt = now;
+    }
+    function count(state) { return observations.filter(row => row.state === state).length; }
+    function episodes(state) { return observations.reduce((total, row, index) => total + (row.state === state && observations[index - 1]?.state !== state ? 1 : 0), 0); }
+    function feedback(studying, distracted) {
+      const active = studying + distracted;
+      if (!active) return ["No study observations were recorded.", ["Keep the camera view clear and try another study block."]];
+      if (!distracted) return ["You stayed visible throughout the observed study time.", ["Keep the same study setup for your next session.", "Take planned breaks between focus blocks."]];
+      if (distracted / active <= .25) return ["You returned to studying after brief interruptions.", ["Set one small goal for your next 20–25 minute focus block.", "Keep likely distractions out of reach before starting."]];
+      return ["This session had several longer interruptions.", ["Try a shorter 15–20 minute focus block next time.", "Prepare water, notes, and materials before you begin.", "Silence notifications before your next block."]];
+    }
+    async function loadDetector() {
+      const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+      faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task" },
+        runningMode: "VIDEO", numFaces: 1, minFaceDetectionConfidence: .5, minFacePresenceConfidence: .5, minTrackingConfidence: .5,
+      });
+    }
+    function observe(now) {
+      if (!running) return;
+      if (onBreak) { record('on_break', now); setStatus('Break'); animationFrame = requestAnimationFrame(observe); return; }
+      if (video.readyState >= 2) {
+        const result = faceLandmarker.detectForVideo(video, now);
+        if (result.faceLandmarks.length) { faceMissingSince = undefined; record('studying', now); setStatus('Studying'); }
+        else { faceMissingSince ??= now; if (now - faceMissingSince >= DISTRACTION_DELAY) { record('distracted', now); setStatus('Distracted'); } else setStatus('Face not visible'); }
+      }
+      animationFrame = requestAnimationFrame(observe);
+    }
+    async function start() {
+      startButton.disabled = true; setStatus('Loading face detector…');
+      try {
+        await loadDetector();
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+        video.srcObject = stream; await video.play(); running = true; sessionStartedAt = performance.now(); setStatus('Studying');
+        breakButton.disabled = false; endButton.disabled = false; animationFrame = requestAnimationFrame(observe);
+      } catch (error) { setStatus('Camera permission is required'); startButton.disabled = false; }
+    }
+    function toggleBreak() { onBreak = !onBreak; faceMissingSince = undefined; record(onBreak ? 'on_break' : 'studying', performance.now()); breakButton.textContent = onBreak ? 'Resume studying' : 'Start break'; setStatus(onBreak ? 'Break' : 'Studying'); }
+    function end() {
+      running = false; cancelAnimationFrame(animationFrame); stream?.getTracks().forEach(track => track.stop());
+      const studying = count('studying'), breakTime = count('on_break'), distracted = count('distracted');
+      const [message, suggestions] = feedback(studying, distracted); const duration = observations.length ? observations.at(-1).elapsedSeconds : 0;
+      summary.classList.remove('hidden'); downloadButton.classList.remove('hidden');
+      summary.innerHTML = `<h2>Your session summary</h2><p>${message}</p><div class="grid"><div class="card">Session duration<span class="value">${duration}s</span></div><div class="card">Observed studying<span class="value">${studying}s</span></div><div class="card">Breaks taken<span class="value">${episodes('on_break')}</span></div><div class="card">Manual break time<span class="value">${breakTime}s</span></div><div class="card">Distraction episodes<span class="value">${episodes('distracted')}</span></div><div class="card">Observed distracted<span class="value">${distracted}s</span></div></div><h3>For your next session</h3><ul>${suggestions.map(item => `<li>${item}</li>`).join('')}</ul>`;
+      setStatus('Session complete'); breakButton.disabled = true; endButton.disabled = true;
+    }
+    function download() { const data = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), observations }, null, 2)], { type: 'application/json' }); const link = Object.assign(document.createElement('a'), { href: URL.createObjectURL(data), download: 'studyvision-session.json' }); link.click(); URL.revokeObjectURL(link.href); }
+    startButton.addEventListener('click', start); breakButton.addEventListener('click', toggleBreak); endButton.addEventListener('click', end); downloadButton.addEventListener('click', download);
+  </script>
+</body>
+</html>
