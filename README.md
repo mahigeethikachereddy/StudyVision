@@ -56,8 +56,10 @@ then install dependencies:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-local.txt
 ```
+
+For web deployment on Vercel, only Flask is needed (see `requirements.txt`).
 
 Run the saved-model live prototype:
 
